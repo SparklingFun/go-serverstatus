@@ -1,0 +1,9 @@
+{
+    "name": "serverstatus",
+    "script": "./go-serverstatus",
+    "exec_mode": "fork",
+    "watch": ["./go-serverstatus"],
+    "merge_logs": false,
+    "max_memory_restart": "50M",
+    "max_restarts": 20
+}

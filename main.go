@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	nativenet "net"
 	"net/http"
 	"runtime"
 	"strings"
@@ -20,14 +21,17 @@ import (
 
 type StatusServer struct {
 	Percent  StatusPercent
-	CPU      []CPUInfo
 	Mem      MemInfo
 	Swap     SwapInfo
 	Load     *load.AvgStat
 	Network  map[string]InterfaceInfo
 	BootTime uint64
 	Uptime   uint64
-	System   string
+}
+type BaseInfoServer struct {
+	CPU    []CPUInfo
+	System string
+	IPAddr string
 }
 type StatusPercent struct {
 	CPU  float64
@@ -59,22 +63,61 @@ type InterfaceInfo struct {
 func main() {
 	port := flag.String("port", ":19999", "HTTP listen port")
 	flag.Parse()
-	http.HandleFunc("/", getInfo)
+	http.HandleFunc("/info", getBaseInfo)
+	http.HandleFunc("/", getNowInfo)
 	err := http.ListenAndServe(*port, nil)
 	if err != nil {
 		log.Fatalln("ListenAndServe: ", err)
 	}
 }
-func getInfo(w http.ResponseWriter, r *http.Request) {
+func getNowInfo(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Add("Access-Control-Allow-Headers", "Content-Type")
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, infoMiniJSON())
 }
+func getBaseInfo(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Add("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, baseMiniJson())
+}
+
+// Get preferred outbound ip of this machine
+func GetOutboundIP() string {
+	conn, err := nativenet.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*nativenet.UDPAddr)
+	return localAddr.IP.String()
+}
+
+func baseMiniJson() string {
+	ss := new(BaseInfoServer)
+	c, _ := cpu.Info()
+	n, _ := host.Info()
+	ss.CPU = make([]CPUInfo, len(c))
+	ss.System = strings.Join([]string{n.Platform, n.PlatformVersion, runtime.GOARCH, n.VirtualizationSystem}, "|")
+	ss.IPAddr = GetOutboundIP()
+
+	for i, ci := range c {
+		ss.CPU[i].ModelName = ci.ModelName
+		ss.CPU[i].Cores = ci.Cores
+	}
+	b, err := json.Marshal(ss)
+	if err != nil {
+		return ""
+	} else {
+		return string(b)
+	}
+}
 func infoMiniJSON() string {
 	v, _ := mem.VirtualMemory()
 	s, _ := mem.SwapMemory()
-	c, _ := cpu.Info()
+	// c, _ := cpu.Info()
 	cc, _ := cpu.Percent(time.Second, false)
 	d, _ := disk.Usage("/")
 	n, _ := host.Info()
@@ -89,12 +132,6 @@ func infoMiniJSON() string {
 	ss.Percent.CPU = cc[0]
 	ss.Percent.Swap = s.UsedPercent
 	ss.Percent.Disk = d.UsedPercent
-	ss.CPU = make([]CPUInfo, len(c))
-	ss.System = strings.Join([]string{runtime.GOOS, runtime.GOARCH}, " ")
-	for i, ci := range c {
-		ss.CPU[i].ModelName = ci.ModelName
-		ss.CPU[i].Cores = ci.Cores
-	}
 	ss.Mem.Total = v.Total
 	ss.Mem.Available = v.Available
 	ss.Mem.Used = v.Used
@@ -102,13 +139,13 @@ func infoMiniJSON() string {
 	ss.Swap.Available = s.Free
 	ss.Swap.Used = s.Used
 	ss.Network = make(map[string]InterfaceInfo)
+	// TODO: Network speed is currently 0 on WSL, but actually effect on Linux Servers
 	for _, v := range nv {
 		var ii InterfaceInfo
 		ii.ByteSent = v.BytesSent
 		ii.ByteRecv = v.BytesRecv
 		ss.Network[v.Name] = ii
 	}
-	// TODO: Network speed is currently 0
 	// for _, v := range i {
 	// 	if ii, ok := ss.Network[v.Name]; ok {
 	// 		ii.Addrs = make([]string, len(v.Addrs))
